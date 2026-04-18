@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# IDEs
+.vscode/
+.idea/
+
+# HELM Artifacts
+qwen_fx_graph.py
+cost_model_sweep_improved.py
+*.bak
+dump/
+logs/
+checkpoints/
+logs.txt
+.helm_profile.json
+accelerate/
+benchmarks/results/
+
+# Experiment logs and RTX 3090 results
+experiments/*.log
+experiments/results/rtx_3090_*/
+experiments/results/vllm_rtx3090_SUMMARY.md
+
+# System
+.DS_Store
+/artifacts
+paper/

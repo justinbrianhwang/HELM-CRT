@@ -1,0 +1,62 @@
+[project]
+name = "helm"
+version = "0.1.0"
+description = "Heterogeneous Execution for Large Models"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+    "psutil",
+    "numpy",
+    "packaging",
+    "transformers>=4.40.0",
+    "accelerate>=1.13.0",
+    "setuptools>=80.9.0",
+]
+
+[project.optional-dependencies]
+# Installed automatically by run_paper_experiments.sh when GPU is detected
+gpu = [
+    "vllm==0.17.1",
+    "deepspeed>=0.18.0",
+]
+eval = [
+    "lm-eval",
+    "py-cpuinfo",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-xdist",
+    "matplotlib>=3.7",
+]
+
+[project.scripts]
+helm = "helm.cli:main"
+
+[tool.uv]
+package = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128" }]
+torchvision = [{ index = "pytorch-cu128" }]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["helm*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-xdist>=3.8.0",
+    "matplotlib>=3.7",
+]

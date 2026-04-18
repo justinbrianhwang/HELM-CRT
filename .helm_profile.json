@@ -1,0 +1,17 @@
+{
+  "gpu_count": 1,
+  "gpus": [
+    {
+      "id": 0,
+      "name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+      "hbm_bw": 113417941658.36848,
+      "flops": 27172191142319.55,
+      "pcie_bw": 10298480398.608795
+    }
+  ],
+  "is_heterogeneous": false,
+  "device_hbm": 113417941658.36848,
+  "device_flops": 27172191142319.55,
+  "pcie_bw": 10298480398.608795,
+  "p2p_bw": 0
+}
