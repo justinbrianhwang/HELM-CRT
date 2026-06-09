@@ -153,7 +153,17 @@ class PipelineRuntime:
         self._reset_decode_cache()
         seq_len = input_ids.shape[1]
 
+        # Lightweight timing instrumentation (behaviour-neutral): record
+        # prefill (TTFT) and decode-loop wall time so callers can report
+        # decode tok/s.  CUDA work is async, so synchronise around the
+        # measured regions for accurate numbers.
+        import time as _time
+        _sync = torch.cuda.synchronize if torch.cuda.is_available() else (lambda: None)
+        _sync()
+        _t0 = _time.perf_counter()
         logits = self.prefill(input_ids)
+        _sync()
+        _t1 = _time.perf_counter()
 
         generated = []
         for step in range(max_new_tokens):
@@ -166,6 +176,12 @@ class PipelineRuntime:
             if self.kv_offload_mgr is not None:
                 self._reset_decode_cache()
             logits = self.decode_step(next_token, step_position)
+
+        _sync()
+        _t2 = _time.perf_counter()
+        self.last_prefill_s = _t1 - _t0
+        self.last_decode_s = _t2 - _t1
+        self.last_decode_tokens = max_new_tokens
 
         generations = torch.cat(generated, dim=1)
 

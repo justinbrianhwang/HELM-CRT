@@ -230,7 +230,15 @@ def execute_generation(prefill_stages, decode_stages, inputs, max_new_tokens, to
         input_ids = inputs
         
     generated_tokens = runtime.generate(input_ids, max_new_tokens)
-    
+
+    # Report decode throughput from the runtime's timing instrumentation.
+    dec_s = getattr(runtime, "last_decode_s", None)
+    dec_n = getattr(runtime, "last_decode_tokens", None)
+    if dec_s and dec_n:
+        ttft_ms = getattr(runtime, "last_prefill_s", 0.0) * 1000.0
+        print(f"  TTFT (prefill): {ttft_ms:.1f} ms")
+        print(f"  Decode: {dec_n} tokens in {dec_s:.3f}s -> {dec_n / dec_s:.2f} tok/s")
+
     # Save outputs artifact
     if run_dir is not None and tokenizer is not None:
         decoded = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)

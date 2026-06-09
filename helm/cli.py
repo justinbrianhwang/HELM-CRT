@@ -94,7 +94,7 @@ def main(argv=None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
     root_dir = Path(__file__).resolve().parents[1]
-    benchmark_path = root_dir / "benchmarks" / "run_benchmark.py"
+    benchmark_path = root_dir / "experiments" / "dev_pipeline.py"
     spec = importlib.util.spec_from_file_location("helm_benchmark_main", benchmark_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load benchmark entrypoint from {benchmark_path}")

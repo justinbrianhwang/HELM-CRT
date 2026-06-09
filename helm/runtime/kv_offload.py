@@ -57,10 +57,10 @@ class KVOffloadConfig:
                    cont_capacity: Optional[int] = None) -> "KVOffloadConfig":
         cfg = model.config
         num_layers   = cfg.num_hidden_layers
-        num_kv_heads = getattr(cfg, "num_key_value_heads",
-                               cfg.num_attention_heads)
-        head_dim     = getattr(cfg, "head_dim",
-                               cfg.hidden_size // cfg.num_attention_heads)
+        # Use `or` (not just getattr default) because some configs (e.g.
+        # Mistral-7B-v0.3) define these keys but leave them None.
+        num_kv_heads = getattr(cfg, "num_key_value_heads", None) or cfg.num_attention_heads
+        head_dim     = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
         dtype = next(model.parameters()).dtype
         if cont_capacity is None:
             cont_capacity = getattr(cfg, "max_position_embeddings", 32768)
@@ -322,6 +322,62 @@ def _make_llama_forward(kvcms):
     return forward
 
 
+def _make_mistral_forward(kvcms):
+    """kvcms: list of KVCacheManager, one per batch item.
+
+    Mistral's attention is structurally identical to Llama's (no q/k norm,
+    GQA via repeat, position_embeddings passed in), so this mirrors
+    _make_llama_forward but imports Mistral's own apply_rotary_pos_emb.
+    Mistral uses a distinct MistralAttention class, so it needs its own
+    patch target — routing it through the Llama patch would silently no-op.
+    """
+    def forward(
+        attn_self,
+        hidden_states,
+        position_embeddings,
+        attention_mask=None,
+        past_key_values=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        from transformers.models.mistral.modeling_mistral import apply_rotary_pos_emb
+
+        bsz, q_len, _ = hidden_states.shape
+        hidden_shape = (bsz, q_len, -1, attn_self.head_dim)
+
+        q = attn_self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        k = attn_self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        v = attn_self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        cos, sin = position_embeddings
+        q, k = apply_rotary_pos_emb(q, k, cos, sin)
+
+        scale = 1.0 / math.sqrt(attn_self.head_dim)
+        groups = q.shape[1] // k.shape[1]
+
+        if q_len > 1:
+            for i in range(bsz):
+                kvcms[i].append_prefill(attn_self.layer_idx, k[i:i+1], v[i:i+1])
+                if kvcms[i].use_contiguous:
+                    kvcms[i].prefill_contiguous(attn_self.layer_idx, k[i:i+1], v[i:i+1])
+            k_exp = k.repeat_interleave(groups, dim=1)
+            v_exp = v.repeat_interleave(groups, dim=1)
+            out = F.scaled_dot_product_attention(
+                q, k_exp, v_exp,
+                attn_mask=attention_mask,
+                dropout_p=attn_self.attention_dropout if attn_self.training else 0.0,
+                scale=scale,
+            )
+        else:
+            out = _decode_batched(kvcms, q, k, v, attn_self.layer_idx, scale)
+
+        out = out.transpose(1, 2).contiguous().reshape(bsz, q_len, -1)
+        out = attn_self.o_proj(out)
+        return out, None
+
+    return forward
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Manager
 # ─────────────────────────────────────────────────────────────────────────────
@@ -406,7 +462,9 @@ class KVOffloadManager:
             self._patch("qwen3")
         elif "qwen2" in name:
             self._patch("qwen2")
-        elif "llama" in name or "mistral" in name:
+        elif "mistral" in name:
+            self._patch("mistral")
+        elif "llama" in name:
             self._patch("llama")
         else:
             raise NotImplementedError(
@@ -426,6 +484,10 @@ class KVOffloadManager:
             import transformers.models.llama.modeling_llama as m
             cls = m.LlamaAttention
             new_fwd = _make_llama_forward(self.kvcms)
+        elif arch == "mistral":
+            import transformers.models.mistral.modeling_mistral as m
+            cls = m.MistralAttention
+            new_fwd = _make_mistral_forward(self.kvcms)
         else:
             raise ValueError(arch)
 

@@ -97,15 +97,27 @@ Key observations:
 
 ## Installation
 
-**Requirements:** Linux, Python 3.10+, NVIDIA driver ≥ 525 + CUDA ≥ 11.8, `uv`
+**Requirements:** Linux **or Windows via WSL2**, Python 3.10+, NVIDIA driver ≥ 525 + CUDA ≥ 11.8, `uv`
+
+> Reproduced on this fork: **WSL2 (Ubuntu 22.04)** on Windows 11 · NVIDIA **RTX 5090** (32 GB, Blackwell `sm_120`) · CUDA 13.2 driver · 62 GB RAM · GCC 11.4.
 
 ```bash
-git clone https://github.com/shashwatpandey4/HELM.git
-cd HELM
+git clone https://github.com/justinbrianhwang/HELM-CRT.git
+cd HELM-CRT
 uv sync
 ```
 
-The AVX2+F16C CPU kernel is built automatically via a C++ extension. Requires GCC ≥ 9 and a CPU with AVX2 support (Intel Haswell+ / AMD Ryzen+).
+The AVX2+F16C CPU kernel is built automatically via a C++ extension on first use. Requires GCC ≥ 9 and a CPU with AVX2 support (Intel Haswell+ / AMD Ryzen+).
+
+Two sets of extras are needed in practice and install into the same environment:
+
+```bash
+# ninja: torch JIT-builds the AVX2 CPU kernel and needs it
+# sentencepiece + protobuf: required by the Llama / Mistral tokenizers
+uv pip install ninja sentencepiece protobuf
+```
+
+On a Blackwell GPU (RTX 50-series) the `cu128` PyTorch wheel pinned in `pyproject.toml` already ships `sm_120` support — no extra steps. The `helm` CLI entry point runs the single-model driver in `experiments/dev_pipeline.py`.
 
 ---
 
@@ -206,3 +218,48 @@ Results land in `experiments/results/<timestamp>/` with a `SUMMARY.md` containin
 ## License
 
 [Apache License 2.0](LICENSE)
+
+---
+
+# Extended Experiments — Additional Model Coverage (this fork)
+
+> Everything **above** this line is the original **HELM** work by **MPS LAB**.
+> Everything **below** documents **additional experiments I ran on top of it** — extending HELM to more HuggingFace model families and fixing what was needed to make them run.
+> — **justinbrianhwang**, 2026
+
+## Setup
+
+Run on **WSL2 (Ubuntu 22.04)** / Windows 11, single **NVIDIA RTX 5090** (32 GB, Blackwell `sm_120`), 62 GB system RAM, CUDA 13.2 driver, PyTorch 2.10 (`cu128`), `transformers` 4.57.
+
+## What I did
+
+- **Verified HELM end-to-end on 5 models from 4 different families** (Mistral, Llama, DeepSeek-distill, Qwen) — each compiles, partitions, and generates coherent text under `--kv-offload`.
+- **Fixed Mistral support** (`helm/runtime/kv_offload.py`). On the `--kv-offload` decode path, Mistral was routed to the Llama attention patch, which targets `LlamaAttention`; a Mistral model uses its own `MistralAttention` class, so the patch never fired. Added a dedicated `_make_mistral_forward` + dispatch branch. Also fixed `KVOffloadConfig.from_model`: Mistral-7B-v0.3's config *defines* `head_dim` but leaves it `None`, which crashed cache sizing — now falls back via `getattr(cfg, k, None) or <computed>`.
+- **Fixed the broken `helm` CLI entry point** (`helm/cli.py`) — it pointed at a `benchmarks/run_benchmark.py` that isn't in the tree; repointed it to the actual driver `experiments/dev_pipeline.py`.
+- **Added decode-timing instrumentation** (`helm/runtime/pipeline_runtime.py`, `experiments/dev_pipeline.py`) to report TTFT and decode tok/s.
+
+## Results (RTX 5090, 32 GB, batch=1, fp16, `--kv-offload`)
+
+Single-run, indicative numbers via `helm --mode execute_stagewise --compiler-plan auto`:
+
+| Model | Family | HELM partition (auto) | TTFT | Decode tok/s |
+|---|---|---|---|---|
+| Mistral-7B-Instruct-v0.3 | Mistral | all-GPU (14.5 GB) | 871 ms | 39.0 |
+| Llama-3.1-8B-Instruct | Llama | all-GPU (16.1 GB) | 126 ms | 32.8 |
+| DeepSeek-R1-Distill-Llama-8B | Llama | all-GPU (16.1 GB) | 108 ms | 42.7 |
+| DeepSeek-R1-Distill-Qwen-7B | Qwen2 | all-GPU (16.3 GB) | 115 ms | 44.7 |
+| **Qwen3-32B** | Qwen3 | **CPU+GPU split** (33.7 GB CPU + 31.8 GB GPU) | 9.1 s | 1.31 |
+
+Key points:
+- The four 7–8B models fit in 32 GB VRAM, so HELM's cost model correctly keeps them **all-GPU**.
+- **Qwen3-32B is the headline:** the model is **65.5 GB in fp16** — it does **not** fit in 32 GB VRAM. HELM ruled all-GPU infeasible and split it across **CPU (33.7 GB) + GPU (31.8 GB)**, running the CPU stage through the AVX2+F16C GEMV kernel (`Patched 231 nn.Linear(s)`). Every other backend (vLLM / Accelerate / DeepSpeed) OOMs in this regime — HELM is the only one that runs it on a single 32 GB GPU.
+
+## Reproduce
+
+```bash
+uv run helm --model Qwen/Qwen3-32B \
+    --mode execute_stagewise --compiler-plan auto \
+    --max-new-tokens 16 --kv-offload
+```
+
+Gated models (Llama, Mistral) need a Hugging Face token with the licenses accepted; DeepSeek-distill and Qwen are open.
