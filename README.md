@@ -5,6 +5,8 @@
 
 **HELM** is a compiler and runtime for running large language models on consumer hardware — machines with a single GPU and CPU RAM. It microbenchmarks your hardware, compiles the model into static per-device FX subgraphs, and executes heterogeneously across CPU and GPU with a paged KV cache that offloads cold pages to CPU RAM during long-context decode.
 
+> **Fork notice.** This repository is a fork of [`MPSLab-ASU/HELM-CRT`](https://github.com/MPSLab-ASU/HELM-CRT) — the original **HELM** is by **MPS LAB** (Apache 2.0, see [LICENSE](LICENSE)). This fork adds extended model-family coverage and the fixes required to run it; my additions are documented in the [**Extended Experiments**](#extended-experiments--additional-model-coverage-this-fork) section at the end. — *justinbrianhwang*
+
 ---
 
 ## vs. Existing Tools
@@ -233,10 +235,25 @@ Run on **WSL2 (Ubuntu 22.04)** / Windows 11, single **NVIDIA RTX 5090** (32 GB, 
 
 ## What I did
 
-- **Verified HELM end-to-end on 5 models from 4 different families** (Mistral, Llama, DeepSeek-distill, Qwen) — each compiles, partitions, and generates coherent text under `--kv-offload`.
-- **Fixed Mistral support** (`helm/runtime/kv_offload.py`). On the `--kv-offload` decode path, Mistral was routed to the Llama attention patch, which targets `LlamaAttention`; a Mistral model uses its own `MistralAttention` class, so the patch never fired. Added a dedicated `_make_mistral_forward` + dispatch branch. Also fixed `KVOffloadConfig.from_model`: Mistral-7B-v0.3's config *defines* `head_dim` but leaves it `None`, which crashed cache sizing — now falls back via `getattr(cfg, k, None) or <computed>`.
-- **Fixed the broken `helm` CLI entry point** (`helm/cli.py`) — it pointed at a `benchmarks/run_benchmark.py` that isn't in the tree; repointed it to the actual driver `experiments/dev_pipeline.py`.
-- **Added decode-timing instrumentation** (`helm/runtime/pipeline_runtime.py`, `experiments/dev_pipeline.py`) to report TTFT and decode tok/s.
+Concretely, my contribution in this fork is:
+
+**1. Extended model coverage — ran 5 models across 4 families end-to-end.**
+Before this, the repo was exercised on Qwen only. I verified that each of these compiles, partitions, and generates coherent text under `--kv-offload`:
+- `mistralai/Mistral-7B-Instruct-v0.3` (Mistral)
+- `meta-llama/Llama-3.1-8B-Instruct` (Llama)
+- `deepseek-ai/DeepSeek-R1-Distill-Llama-8B` (Llama-based DeepSeek)
+- `deepseek-ai/DeepSeek-R1-Distill-Qwen-7B` (Qwen2-based DeepSeek)
+- `Qwen/Qwen3-32B` (the >VRAM case — runs split across CPU+GPU)
+
+**2. Fixed Mistral on the KV-offload path** — `helm/runtime/kv_offload.py`:
+- Added a dedicated `_make_mistral_forward(kvcms)` and a `"mistral"` dispatch branch in `KVOffloadManager._apply_patches` / `_patch`. Previously `"mistral"` was routed to the Llama patch, which monkey-patches `LlamaAttention.forward`; a Mistral model's modules are `MistralAttention`, so the patch never fired and the paged KV cache was never populated.
+- Fixed `KVOffloadConfig.from_model`: Mistral-7B-v0.3's config *defines* `head_dim` (and `num_key_value_heads`) but leaves them `None`, so `getattr(cfg, "head_dim", default)` returned `None` and crashed cache sizing (`int * NoneType`). Now resolved via `getattr(cfg, k, None) or <computed>`, mirroring how `MistralAttention` itself computes `head_dim`.
+
+**3. Fixed the broken `helm` CLI entry point** — `helm/cli.py`: it delegated to a `benchmarks/run_benchmark.py` that isn't present in the tree (so `helm …` failed with `FileNotFoundError`). Repointed it to the actual single-model driver `experiments/dev_pipeline.py`, whose argument interface it already matches.
+
+**4. Added decode-timing instrumentation** — `helm/runtime/pipeline_runtime.py` records prefill (TTFT) and decode-loop wall time (CUDA-synchronised, behaviour-neutral); `experiments/dev_pipeline.py` prints **TTFT** and **decode tok/s**. The numbers below come from this.
+
+**5. Environment notes (Blackwell / WSL2)** — documented the real extra steps needed in [Installation](#installation): `ninja` (torch JIT-builds the AVX2 kernel), and `sentencepiece` + `protobuf` (Llama/Mistral tokenizers). The pinned `cu128` PyTorch wheel already provides RTX 50-series `sm_120` support.
 
 ## Results (RTX 5090, 32 GB, batch=1, fp16, `--kv-offload`)
 
