@@ -229,7 +229,7 @@ Results land in `experiments/results/<timestamp>/` with a `SUMMARY.md` containin
 
 ## Setup
 
-Run on **WSL2 (Ubuntu 22.04)** / Windows 11, single **NVIDIA RTX 5090** (32 GB, Blackwell `sm_120`), 62 GB system RAM, CUDA 13.2 driver, PyTorch 2.10 (`cu128`), `transformers` 4.57.
+Run on **WSL2 (Ubuntu 22.04)** / Windows 11, single **NVIDIA RTX 5090** (32 GB, Blackwell `sm_120`), 128 GB system RAM, CUDA 13.2 driver, PyTorch 2.10 (`cu128`), `transformers` 4.57.
 
 ## What I did
 
